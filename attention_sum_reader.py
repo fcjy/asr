@@ -11,9 +11,9 @@ import tensorflow as tf
 from tensorflow.contrib.rnn import LSTMCell, GRUCell, MultiRNNCell
 
 class Attention_sum_reader(object):
-    def __init__(self, q_len, d_len, A_len, lr, embedding_matrix, hidden_size, num_layers):
-        self._q_len = q_len
+    def __init__(self, d_len, q_len, A_len, lr, embedding_matrix, hidden_size, num_layers):
         self._d_len = d_len
+        self._q_len = q_len
         self._A_len = A_len
         self._lr = lr
         self._embedding_matrix = embedding_matrix
@@ -29,20 +29,23 @@ class Attention_sum_reader(object):
         self._build_network()
 
     def train(self, sess, provider):
-        optimizer = _Optimizer()
+        optimizer = self._Optimizer()
         train_op = optimizer.minimize(self._total_loss)
 
         sess.run(tf.global_variables_initializer())
-        for (step_count, data) in provider:
+        print('pig')
+        for (step_count, data) in enumerate(provider):
             q_input, d_input, context_mask, A_mask, y = data
+            print('miao', len(q_input))
             _, total_loss = sess.run([train_op, sess._total_loss], feed_dict={
                     self._q_input: q_input,
                     self._d_input: d_input,
                     self._context_mask: context_mask,
                     self._A_mask: A_mask,
                     self._y: y})
-            if step_count % 100 == 0 and step_count > 0:
-                logging.info('[Train] step_count: {}, loss: {}'.format(step_count, loss))
+            print('wang')
+            if step_count % 10 == 0:
+                logging.info('[Train] step_count: {}, loss: {}'.format(step_count + 1, loss))
 
     def test(self):
         pass
@@ -101,7 +104,6 @@ class Attention_sum_reader(object):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    logging.info('hello')
 
     embedded = tf.zeros((1000, 100), dtype=tf.float32)
     Attention_sum_reader(d_len=600, q_len=60, A_len=10, lr=0.1, embedding_matrix=embedded, hidden_size=128, num_layers=2)

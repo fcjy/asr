@@ -195,8 +195,14 @@ def data_provider(src_data, batch_size, step_num, d_len, q_len):
     context_masks = []
     A_masks = []
     y = []
+    print('wtf1')
     for i in range(N):
-        context_masks.append([1] * len(documents[i]) + [0] * (d_len - len(documents[i])))
+        
+        if i % 100 == 0:
+            print('wtf', i)
+
+        context_mask = [1] * len(documents[i]) + [0] * (d_len - len(documents[i]))
+        context_masks.append(context_mask)
 
         assert(len(documents[i]) <= d_len)
         documents[i] += [PAD_ID] * (d_len - len(documents[i]))
@@ -210,6 +216,7 @@ def data_provider(src_data, batch_size, step_num, d_len, q_len):
         A_masks.append(A_mask)
 
         y.append([1] + [0] * 9)
+    print('wtf2')
 
     h = N
     for _ in range(step_num):
