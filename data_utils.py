@@ -6,20 +6,23 @@ from __future__ import print_function
 
 import os
 import io
+import random
 import re
 import logging
-import numpy as np
 import nltk
+import numpy as np
 import tensorflow as tf
 
 from collections import Counter
 
+_PAD = u'_PAD'
 _UNK = u'_UNK'
 _EOS = u'_EOS'
-_START_VOCAB = [_UNK, _EOS]
+_START_VOCAB = [_PAD, _UNK, _EOS]
 
-UNK_ID = 0
-EOS_ID = 1
+PAD_ID = 0
+UNK_ID = 1
+EOS_ID = 2
 
 def writeWrapper(fh, context):
     if not type(context) is unicode:
@@ -118,12 +121,12 @@ def prepare_cbt_data(data_dir, out_dir, train_file, valid_file, test_file):
     return idx_train_file, idx_valid_file, idx_train_file, vocab_file
 
 def read_cbt_data(idx_file, d_len_range = None, q_len_range = None, max_count = None):
-    
     def ok(d_len, q_len):
         d_con = (not d_len_range) or (d_len_range[0] < d_len < d_len_range[1])
         q_con = (not q_len_range) or (q_len_range[0] < q_len < q_len_range[1])
         return d_con and q_con
 
+    skip = 0
     documents, questions, answers, candidates = [], [], [], []
     with io.open(idx_file, 'r', encoding='utf8') as f:
         cnt = 0
@@ -145,12 +148,16 @@ def read_cbt_data(idx_file, d_len_range = None, q_len_range = None, max_count = 
                     questions.append(q)
                     answers.append(a)
                     candidates.append(A)
+                else:
+                    skip += 1
             elif cnt == 22:
                 d, q, a, A = [], [], [], []
                 cnt = 0
 
-            if len(questions) >= max_count:
+            if max_count and len(questions) >= max_count:
                 break; 
+
+    logging.info('[read_cbt_data] skip: {}, read: {}'.format(skip, len(questions)))
 
     return documents, questions, answers, candidates
 
@@ -176,10 +183,64 @@ def gen_embeddings(word_dict, embed_dim, embed_file=None):
     
     return embedding_matrix
 
+def data_provider(src_data, batch_size, step_num, d_len, q_len):
+    documents, questions, answers, candidates = src_data
+    N = len(documents)
+    
+    logging.info('[data_provider] N: {}, batch_size: {}, step_num: {}, d_len: {}, q_len: {}'.format(
+                N, batch_size, step_num, d_len, q_len))
+    assert(len(questions) == N and len(answers) == N and len(candidates) == N)
+    assert(N > batch_size * 10)
+
+    context_masks = []
+    A_masks = []
+    y = []
+    for i in range(N):
+        context_masks.append([1] * len(documents[i]) + [0] * (d_len - len(documents[i])))
+
+        assert(len(documents[i]) <= d_len)
+        documents[i] += [PAD_ID] * (d_len - len(documents[i]))
+
+        assert(len(questions[i]) <= q_len)
+        questions[i] += [PAD_ID] * (q_len - len(questions[i]))
+
+        A_mask = []
+        for cid in candidates[i]:
+            A_mask.append([1 if wid == cid else 0 for wid in documents[i]])
+        A_masks.append(A_mask)
+
+        y.append([1] + [0] * 9)
+
+    h = N
+    for _ in range(step_num):
+        if h + batch_size >= N:
+            random.shuffle(documents)
+            random.shuffle(questions)
+            random.shuffle(context_masks)
+            random.shuffle(A_masks)
+            random.shuffle(y)
+            h = 0
+
+        yield documents[h:h+batch_size], questions[h:h+batch_size], context_masks[h:h+batch_size], A_masks[h:h+batch_size], y[h:h+batch_size]
+        h += batch_size
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
-    idx_train, idx_valid, idx_test, vocab = prepare_cbt_data(
-            '/data1/flashlin/data/CBTest/data/', 'out', 'cbtest_NE_train.txt', 'cbtest_NE_valid_2000ex.txt', 'cbtest_NE_test_2500ex.txt')
-    word_dict = load_vocab(vocab)
-    embeddings = gen_embeddings(word_dict, 100, '/data1/flashlin/data/glove/glove.6B.100d.txt')
+    #idx_train, idx_valid, idx_test, vocab = prepare_cbt_data(
+    #        '/data1/flashlin/data/CBTest/data/', 'out', 'cbtest_NE_train.txt', 'cbtest_NE_valid_2000ex.txt', 'cbtest_NE_test_2500ex.txt')
+
+    logging.info('test read')
+    src_data = read_cbt_data('out/cbtest_NE_valid_2000ex.txt.idx', [100, 800], [10, 100])
+    provider = data_provider(src_data, 8, 10000, 800, 100)
+    for (idx, data) in enumerate(provider):
+        if idx % 1000 == 0:
+            logging.info('miao {}'.format(idx))
+            doc, que, cm, am, y = data
+            print(doc)
+            print(que)
+            print(cm)
+            print(am)
+            print(y)
+
+        

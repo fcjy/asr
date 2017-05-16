@@ -28,8 +28,6 @@ class Attention_sum_reader(object):
 
         self._build_network()
 
-        pass
-
     def train(self, sess, provider):
         optimizer = _Optimizer()
         train_op = optimizer.minimize(self._total_loss)
