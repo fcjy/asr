@@ -20,10 +20,10 @@ class Attention_sum_reader(object):
         self._hidden_size = hidden_size
         self._num_layers = num_layers
 
-        self._q_input = tf.placeholder(dtype=tf.int32, shape=(None, q_len), name='q_input')
         self._d_input = tf.placeholder(dtype=tf.int32, shape=(None, d_len), name='d_input')
+        self._q_input = tf.placeholder(dtype=tf.int32, shape=(None, q_len), name='q_input')
         self._context_mask = tf.placeholder(dtype=tf.int8, shape=(None, d_len), name='context_mask')
-        self._A_mask = tf.placeholder(dtype=tf.int8, shape=(None, A_len, d_len), name='A_mask')
+        self._ca = tf.placeholder(dtype=tf.int32, shape=(None, A_len), name='ca')
         self._y = tf.placeholder(dtype=tf.int32, shape=(None), name='y')
 
         self._build_network()
@@ -33,19 +33,24 @@ class Attention_sum_reader(object):
         train_op = optimizer.minimize(self._total_loss)
 
         sess.run(tf.global_variables_initializer())
-        print('pig')
         for (step_count, data) in enumerate(provider):
-            q_input, d_input, context_mask, A_mask, y = data
-            print('miao', len(q_input))
-            _, total_loss = sess.run([train_op, sess._total_loss], feed_dict={
-                    self._q_input: q_input,
+            if step_count % 20 == 0 and step_count > 0:
+                logging.info('[Train] step_count: {}, loss: {}'.format(step_count, total_loss))
+
+            d_input, q_input, context_mask, ca, y = data
+
+            #logging.info('[wtf] {} {} {} {} {}'.format(
+            #            np.array(d_input).shape, np.array(q_input).shape, 
+            #            np.array(context_mask).shape,
+            #            np.array(ca).shape, np.array(y).shape))
+            
+            _, total_loss = sess.run([train_op, self._total_loss], feed_dict={
                     self._d_input: d_input,
+                    self._q_input: q_input,
                     self._context_mask: context_mask,
-                    self._A_mask: A_mask,
+                    self._ca: ca,
                     self._y: y})
-            print('wang')
-            if step_count % 10 == 0:
-                logging.info('[Train] step_count: {}, loss: {}'.format(step_count + 1, loss))
+                
 
     def test(self):
         pass
@@ -83,16 +88,20 @@ class Attention_sum_reader(object):
             logging.info('d_encode shape {}'.format(d_encode.get_shape()))
 
         with tf.variable_scope('dot_sum'):
+            def reduce_attention_sum(data):
+                at, d, ca = data
+                def reduce_attention_sum_by_ans(aid):
+                    return tf.reduce_sum(tf.multiply(at, tf.cast(tf.equal(d, aid), tf.float32)))
+                return tf.map_fn(reduce_attention_sum_by_ans, ca, dtype=tf.float32)
+
             attention_value = tf.map_fn(
                     lambda v: tf.reduce_sum(tf.multiply(v[0], v[1]), -1),
                     (q_encode, d_encode),
                     dtype=tf.float32)
             attention_value_masked = tf.multiply(attention_value, tf.cast(self._context_mask, tf.float32))
             attention_value_softmax = tf.nn.softmax(attention_value_masked)
-            attention_sum = tf.map_fn(
-                    lambda v: tf.reduce_sum(tf.multiply(v[0], v[1]), -1),
-                    (attention_value_softmax, tf.cast(self._A_mask, tf.float32)), 
-                    dtype=tf.float32)
+            attention_sum = tf.map_fn(reduce_attention_sum, 
+                    (attention_value_softmax, self._d_input, self._ca), dtype=tf.float32)
             
             # [batch_size, A_len]
             logging.info('attention_sum shape {}'.format(attention_sum.get_shape()))
