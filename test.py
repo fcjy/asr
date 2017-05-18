@@ -22,7 +22,7 @@ A_len = 10
 lr = 0.0005
 hidden_size = 128
 num_layers = 1
-batch_size = 128
+batch_size = 64
 step_num = 10000
 embed_dim = 100
 embed_file = '/data1/flashlin/data/glove/glove.6B.100d.txt'
@@ -36,5 +36,4 @@ src_data = read_cbt_data('out/cbtest_NE_train.txt.idx', [100, d_len], [10, q_len
 provider = data_provider(src_data, batch_size, step_num, d_len, q_len)
 
 with tf.Session() as sess:
-    with tf.device('/gpu:0'):
-        asr.train(sess, provider)
+    asr.train(sess, provider)

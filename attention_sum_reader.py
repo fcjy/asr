@@ -29,29 +29,31 @@ class Attention_sum_reader(object):
         self._build_network()
 
     def train(self, sess, provider):
-        optimizer = self._Optimizer()
-        train_op = optimizer.minimize(self._loss)
+        global_step = tf.contrib.framework.get_or_create_global_step()
+        optimizer = self._Optimizer(global_step)
+        train_op = optimizer.minimize(self._loss, global_step=global_step)
 
         sess.run(tf.global_variables_initializer())
         losses = []
         rights = []
         for (step_count, data) in enumerate(provider):
-            if step_count % 50 == 0 and step_count > 0:
-                logging.info('[Train] step_count: {}, loss: {}, right: {}'.format(
-                            step_count,
-                            np.sum(losses) / len(losses),
-                            np.sum(rights) / len(rights)))
-                losses = []
-                rights = []
-
             d_input, q_input, context_mask, ca, y = data
-            _, loss, right = sess.run(
-                    [train_op, self._loss, self._right], 
+            _, loss, prediction = sess.run(
+                    [train_op, self._loss, self._prediction], 
                     feed_dict={self._d_input: d_input, self._q_input: q_input, self._context_mask: context_mask,
                     self._ca: ca, self._y: y})
             losses.append(loss)
             rights.append(right / len(d_input))
                 
+            if step_count % 50 == 0 and step_count > 0:
+                logging.info('[Train] step_count: {}, loss: {}, prediction: {}, lr: {}'.format(
+                            step_count,
+                            np.sum(losses) / len(losses),
+                            np.sum(rights) / len(rights),
+                            sess.run(self._lr)))
+                losses = []
+                rights = []
+
 
     def test(self):
         pass
@@ -63,7 +65,9 @@ class Attention_sum_reader(object):
     def _MultiRNNCell(self):
         return MultiRNNCell([self._RNNCell() for _ in range(self._num_layers)])
 
-    def _Optimizer(self):
+    def _Optimizer(self, global_step):
+        self._lr = tf.train.exponential_decay(self._lr, global_step, 500, 0.5, staircase=True)
+
         #return tf.train.GradientDescentOptimizer(self._lr)
         return tf.train.AdamOptimizer(self._lr)
 
@@ -111,13 +115,14 @@ class Attention_sum_reader(object):
             # [batch_size, A_len]
             logging.info('attention_sum shape {}'.format(attention_sum.get_shape()))
 
+        with tf.variable_scope('prediction'):
+            self._prediction = tf.reduce_sum(tf.cast(
+                        tf.equal(tf.cast(self._y, dtype=tf.int64), tf.argmax(attention_sum, 1)), tf.float32))
+
         with tf.variable_scope('loss'):
             label = tf.Variable([1., 0., 0., 0., 0., 0., 0., 0., 0., 0.], dtype=tf.float32)
             output = attention_sum / tf.reduce_sum(attention_sum, -1, keep_dims=True)
             self._loss = tf.reduce_mean(-tf.log(tf.reduce_sum(attention_sum * label, -1)))
-
-            self._right = tf.reduce_sum(tf.cast(
-                        tf.equal(tf.cast(self._y, dtype=tf.int64), tf.argmax(attention_sum, 1)), tf.float32))
 
 
 if __name__ == '__main__':
