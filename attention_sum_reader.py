@@ -30,38 +30,41 @@ class Attention_sum_reader(object):
 
     def train(self, sess, provider):
         optimizer = self._Optimizer()
-        train_op = optimizer.minimize(self._total_loss)
+        train_op = optimizer.minimize(self._loss)
 
         sess.run(tf.global_variables_initializer())
+        losses = []
+        rights = []
         for (step_count, data) in enumerate(provider):
-            if step_count % 20 == 0 and step_count > 0:
-                logging.info('[Train] step_count: {}, loss: {}'.format(step_count, total_loss))
+            if step_count % 50 == 0 and step_count > 0:
+                logging.info('[Train] step_count: {}, loss: {}, right: {}'.format(
+                            step_count,
+                            np.sum(losses) / len(losses),
+                            np.sum(rights) / len(rights)))
+                losses = []
+                rights = []
 
             d_input, q_input, context_mask, ca, y = data
-
-            #logging.info('[wtf] {} {} {} {} {}'.format(
-            #            np.array(d_input).shape, np.array(q_input).shape, 
-            #            np.array(context_mask).shape,
-            #            np.array(ca).shape, np.array(y).shape))
-            
-            _, total_loss = sess.run([train_op, self._total_loss], feed_dict={
-                    self._d_input: d_input,
-                    self._q_input: q_input,
-                    self._context_mask: context_mask,
-                    self._ca: ca,
-                    self._y: y})
+            _, loss, right = sess.run(
+                    [train_op, self._loss, self._right], 
+                    feed_dict={self._d_input: d_input, self._q_input: q_input, self._context_mask: context_mask,
+                    self._ca: ca, self._y: y})
+            losses.append(loss)
+            rights.append(right / len(d_input))
                 
 
     def test(self):
         pass
 
     def _RNNCell(self):
-        return LSTMCell(self._hidden_size)
+        return GRUCell(self._hidden_size)
+        #return LSTMCell(self._hidden_size)
 
     def _MultiRNNCell(self):
         return MultiRNNCell([self._RNNCell() for _ in range(self._num_layers)])
 
     def _Optimizer(self):
+        #return tf.train.GradientDescentOptimizer(self._lr)
         return tf.train.AdamOptimizer(self._lr)
 
     def _build_network(self):
@@ -71,10 +74,12 @@ class Attention_sum_reader(object):
             outputs, final_states = tf.nn.bidirectional_dynamic_rnn(
                     cell_bw=self._MultiRNNCell(), cell_fw=self._MultiRNNCell(),
                     inputs=q_embed, dtype=tf.float32, sequence_length=q_lens)
-            q_encode = tf.concat([final_states[0][-1][1], final_states[1][-1][1]], axis=-1)
+            q_encode = tf.concat([final_states[0][-1], final_states[1][-1]], axis=-1)
+            #q_encode = tf.concat([final_states[0][-1][1], final_states[1][-1][1]], axis=-1)
 
             # [batch_size, hidden_size * 2]
             logging.info('q_encode shape {}'.format(q_encode.get_shape()))
+            logging.info('q_encode shape {}'.format(final_states[0][-1][0].get_shape()))
 
         with tf.variable_scope('d_encoder'):
             d_embed = tf.nn.embedding_lookup(self._embedding_matrix, self._d_input)
@@ -102,13 +107,17 @@ class Attention_sum_reader(object):
             attention_value_softmax = tf.nn.softmax(attention_value_masked)
             attention_sum = tf.map_fn(reduce_attention_sum, 
                     (attention_value_softmax, self._d_input, self._ca), dtype=tf.float32)
-            
+
             # [batch_size, A_len]
             logging.info('attention_sum shape {}'.format(attention_sum.get_shape()))
 
         with tf.variable_scope('loss'):
-            losses = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._y, logits=attention_sum)
-            self._total_loss = tf.reduce_mean(losses)
+            label = tf.Variable([1., 0., 0., 0., 0., 0., 0., 0., 0., 0.], dtype=tf.float32)
+            output = attention_sum / tf.reduce_sum(attention_sum, -1, keep_dims=True)
+            self._loss = tf.reduce_mean(-tf.log(tf.reduce_sum(attention_sum * label, -1)))
+
+            self._right = tf.reduce_sum(tf.cast(
+                        tf.equal(tf.cast(self._y, dtype=tf.int64), tf.argmax(attention_sum, 1)), tf.float32))
 
 
 if __name__ == '__main__':

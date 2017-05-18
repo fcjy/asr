@@ -214,7 +214,7 @@ def data_provider(src_data, batch_size, step_num, d_len, q_len):
         if h + batch_size >= N:
             random.shuffle(idx)
             h = 0
-            logging.info('[data_provider] next epoch')
+            logging.info('[data_provider] new epoch')
 
         d_input = []
         q_input = []
