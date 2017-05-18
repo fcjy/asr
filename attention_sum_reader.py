@@ -4,6 +4,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import logging
 import numpy as np
 import tensorflow as tf
@@ -11,7 +12,8 @@ import tensorflow as tf
 from tensorflow.contrib.rnn import LSTMCell, GRUCell, MultiRNNCell
 
 class Attention_sum_reader(object):
-    def __init__(self, d_len, q_len, A_len, lr, embedding_matrix, hidden_size, num_layers):
+    def __init__(self, name, d_len, q_len, A_len, lr, embedding_matrix, hidden_size, num_layers):
+        self._name = name
         self._d_len = d_len
         self._q_len = q_len
         self._A_len = A_len
@@ -28,31 +30,41 @@ class Attention_sum_reader(object):
 
         self._build_network()
 
-    def train(self, sess, provider):
-        global_step = tf.contrib.framework.get_or_create_global_step()
-        optimizer = self._Optimizer(global_step)
-        train_op = optimizer.minimize(self._loss, global_step=global_step)
+        self._saver = tf.train.Saver()
 
+    def train(self, sess, provider, save_dir, save_period, load_path=None):
         sess.run(tf.global_variables_initializer())
+
+        if load_path:
+            logging.info('[restore] {}'.format(load_path))
+            self._saver.restore(sess, load_path)
+
         losses = []
-        rights = []
-        for (step_count, data) in enumerate(provider):
+        predictions = []
+        for data in provider:
             d_input, q_input, context_mask, ca, y = data
             _, loss, prediction = sess.run(
-                    [train_op, self._loss, self._prediction], 
+                    [self._train_op, self._loss, self._prediction], 
                     feed_dict={self._d_input: d_input, self._q_input: q_input, self._context_mask: context_mask,
                     self._ca: ca, self._y: y})
             losses.append(loss)
-            rights.append(right / len(d_input))
-                
-            if step_count % 50 == 0 and step_count > 0:
-                logging.info('[Train] step_count: {}, loss: {}, prediction: {}, lr: {}'.format(
-                            step_count,
+            predictions.append(prediction / len(d_input))
+
+            step = sess.run(self._global_step)
+
+            if step % 100 == 0:
+                logging.info('[Train] step: {}, loss: {}, prediction: {}, lr: {}'.format(
+                            step,
                             np.sum(losses) / len(losses),
-                            np.sum(rights) / len(rights),
+                            np.sum(predictions) / len(predictions),
                             sess.run(self._lr)))
                 losses = []
-                rights = []
+                predictions = []
+
+            if step % save_period == 0 and step > 0:
+                save_path = os.path.join(save_dir, self._name)
+                logging.info('[Save] {} {}'.format(save_path, step))
+                self._saver.save(sess, save_path, global_step=self._global_step)
 
 
     def test(self):
@@ -66,7 +78,7 @@ class Attention_sum_reader(object):
         return MultiRNNCell([self._RNNCell() for _ in range(self._num_layers)])
 
     def _Optimizer(self, global_step):
-        self._lr = tf.train.exponential_decay(self._lr, global_step, 500, 0.5, staircase=True)
+        self._lr = tf.train.exponential_decay(self._lr, global_step, 1000, 0.5, staircase=True)
 
         #return tf.train.GradientDescentOptimizer(self._lr)
         return tf.train.AdamOptimizer(self._lr)
@@ -124,9 +136,13 @@ class Attention_sum_reader(object):
             output = attention_sum / tf.reduce_sum(attention_sum, -1, keep_dims=True)
             self._loss = tf.reduce_mean(-tf.log(tf.reduce_sum(attention_sum * label, -1)))
 
+        with tf.variable_scope('train'):
+            self._global_step = tf.contrib.framework.get_or_create_global_step()
+            optimizer = self._Optimizer(self._global_step)
+            self._train_op = optimizer.minimize(self._loss, global_step=self._global_step)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
     embedded = tf.zeros((1000, 100), dtype=tf.float32)
-    Attention_sum_reader(d_len=600, q_len=60, A_len=10, lr=0.1, embedding_matrix=embedded, hidden_size=128, num_layers=2)
+    Attention_sum_reader(name='miao', d_len=600, q_len=60, A_len=10, lr=0.1, embedding_matrix=embedded, hidden_size=128, num_layers=2)
