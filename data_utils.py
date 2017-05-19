@@ -185,7 +185,7 @@ def gen_embeddings(word_dict, embed_dim, embed_file=None):
     
     return embedding_matrix
 
-def data_provider(src_data, batch_size, step_num, d_len, q_len):
+def data_provider(src_data, batch_size, d_len, q_len, step_num, epoch_num):
     documents, questions, answers, candidates = src_data
     N = len(documents)
     
@@ -208,10 +208,17 @@ def data_provider(src_data, batch_size, step_num, d_len, q_len):
 
         ys.append(0)
 
+    if not step_num:
+        assert(epoch_num)
+        step_num = N // batch_size
+        if N % batch_size != 0:
+            step_num += 1
+        step_num *= epoch_num
+
     h = N
     idx = [i for i in range(N)]
     for _ in range(step_num):
-        if h + batch_size >= N:
+        if h == N:
             random.shuffle(idx)
             h = 0
             logging.info('[data_provider] new epoch')
@@ -222,13 +229,14 @@ def data_provider(src_data, batch_size, step_num, d_len, q_len):
         ca = []
         y = []
 
-        for i in range(batch_size):
+        data_len = batch_size if h + batch_size <= N else N - h
+        for i in range(data_len):
             d_input.append(documents[idx[h + i]])
             q_input.append(questions[idx[h + i]])
             context_mask.append(context_masks[idx[h + i]])
             ca.append(candidates[idx[h + i]])
             y.append(ys[idx[h + i]])
-        h += batch_size
+        h += data_len
 
         yield d_input, q_input, context_mask, ca, y
 

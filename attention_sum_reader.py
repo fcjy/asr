@@ -32,12 +32,12 @@ class Attention_sum_reader(object):
 
         self._saver = tf.train.Saver()
 
-    def train(self, sess, provider, save_dir, save_period, load_path=None):
+    def train(self, sess, provider, save_dir, save_period, model_path=None):
         sess.run(tf.global_variables_initializer())
 
-        if load_path:
-            logging.info('[restore] {}'.format(load_path))
-            self._saver.restore(sess, load_path)
+        if model_path:
+            logging.info('[restore] {}'.format(model_path))
+            self._saver.restore(sess, model_path)
 
         losses = []
         predictions = []
@@ -67,8 +67,23 @@ class Attention_sum_reader(object):
                 self._saver.save(sess, save_path, global_step=self._global_step)
 
 
-    def test(self):
-        pass
+    def test(self, sess, provider, model_path):
+        logging.info('[restore] {}'.format(model_path))
+        self._saver.restore(sess, model_path)
+        
+        q_num = 0.0
+        p_num = 0.0
+        for data in provider:
+            d_input, q_input, context_mask, ca, y = data
+            prediction = sess.run(
+                    self._prediction,
+                    feed_dict={self._d_input: d_input, self._q_input: q_input, self._context_mask: context_mask,
+                    self._ca: ca, self._y: y})
+            
+            q_num += len(d_input)
+            p_num += prediction
+
+        logging.info('[test] q_num: {}, p_num: {}, {}'.format(q_num, p_num, float(p_num)/q_num))
 
     def _RNNCell(self):
         return GRUCell(self._hidden_size)
