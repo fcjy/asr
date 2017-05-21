@@ -185,7 +185,7 @@ def gen_embeddings(word_dict, embed_dim, embed_file=None):
     
     return embedding_matrix
 
-def data_provider(src_data, batch_size, d_len, q_len, step_num, epoch_num):
+def data_provider(src_data, batch_size, d_len, q_len, step_num=None, epoch_num=None):
     documents, questions, answers, candidates = src_data
     N = len(documents)
     

@@ -9,15 +9,17 @@ import logging
 import numpy as np
 import tensorflow as tf
 
-from tensorflow.contrib.rnn import LSTMCell, GRUCell, MultiRNNCell
+from tensorflow.contrib.rnn import LSTMCell, GRUCell, MultiRNNCell, DropoutWrapper
 
 class Attention_sum_reader(object):
-    def __init__(self, name, d_len, q_len, A_len, lr, embedding_matrix, hidden_size, num_layers):
+    def __init__(self, name, d_len, q_len, A_len, lr_init, lr_decay, embedding_matrix, hidden_size, num_layers):
         self._name = name
         self._d_len = d_len
         self._q_len = q_len
         self._A_len = A_len
-        self._lr = lr
+        self._lr_init = lr_init
+        self._lr_decay = lr_decay
+        #self._embedding_matrix = tf.Variable(embedding_matrix, dtype=tf.float32)
         self._embedding_matrix = embedding_matrix
         self._hidden_size = hidden_size
         self._num_layers = num_layers
@@ -73,7 +75,7 @@ class Attention_sum_reader(object):
         
         q_num = 0.0
         p_num = 0.0
-        for data in provider:
+        for (i, data) in enumerate(provider):
             d_input, q_input, context_mask, ca, y = data
             prediction = sess.run(
                     self._prediction,
@@ -82,18 +84,20 @@ class Attention_sum_reader(object):
             
             q_num += len(d_input)
             p_num += prediction
+            
+            if i % 50 == 0:
+                logging.info('[test] q_num: {}, p_num: {}, {}'.format(q_num, p_num, float(p_num)/q_num))
 
         logging.info('[test] q_num: {}, p_num: {}, {}'.format(q_num, p_num, float(p_num)/q_num))
 
     def _RNNCell(self):
-        return GRUCell(self._hidden_size)
-        #return LSTMCell(self._hidden_size)
-
-    def _MultiRNNCell(self):
-        return MultiRNNCell([self._RNNCell() for _ in range(self._num_layers)])
-
+        cell = GRUCell(self._hidden_size)
+        #cell = LSTMCell(self._hidden_size)
+        return DropoutWrapper(cell, input_keep_prob=0.8, output_keep_prob=0.8)
+        #return cell
+    
     def _Optimizer(self, global_step):
-        self._lr = tf.train.exponential_decay(self._lr, global_step, 1000, 0.5, staircase=True)
+        self._lr = tf.train.exponential_decay(self._lr_init, global_step, self._lr_decay, 0.5, staircase=True)
 
         #return tf.train.GradientDescentOptimizer(self._lr)
         return tf.train.AdamOptimizer(self._lr)
@@ -103,9 +107,9 @@ class Attention_sum_reader(object):
             q_embed = tf.nn.embedding_lookup(self._embedding_matrix, self._q_input)
             q_lens = tf.reduce_sum(tf.sign(tf.abs(self._q_input)), 1)
             outputs, final_states = tf.nn.bidirectional_dynamic_rnn(
-                    cell_bw=self._MultiRNNCell(), cell_fw=self._MultiRNNCell(),
+                    cell_bw=self._RNNCell(), cell_fw=self._RNNCell(),
                     inputs=q_embed, dtype=tf.float32, sequence_length=q_lens)
-            q_encode = tf.concat([final_states[0][-1], final_states[1][-1]], axis=-1)
+            q_encode = tf.concat([final_states[0], final_states[1]], axis=-1)
             #q_encode = tf.concat([final_states[0][-1][1], final_states[1][-1][1]], axis=-1)
 
             # [batch_size, hidden_size * 2]
@@ -116,7 +120,7 @@ class Attention_sum_reader(object):
             d_embed = tf.nn.embedding_lookup(self._embedding_matrix, self._d_input)
             d_lens = tf.reduce_sum(tf.sign(tf.abs(self._d_input)), 1)
             outputs, final_states = tf.nn.bidirectional_dynamic_rnn(
-                    cell_bw=self._MultiRNNCell(), cell_fw=self._MultiRNNCell(),
+                    cell_bw=self._RNNCell(), cell_fw=self._RNNCell(),
                     inputs=d_embed, dtype=tf.float32, sequence_length=d_lens)
             d_encode = tf.concat(outputs, axis=-1)
 
@@ -136,20 +140,20 @@ class Attention_sum_reader(object):
                     dtype=tf.float32)
             attention_value_masked = tf.multiply(attention_value, tf.cast(self._context_mask, tf.float32))
             attention_value_softmax = tf.nn.softmax(attention_value_masked)
-            attention_sum = tf.map_fn(reduce_attention_sum, 
+            self._attention_sum = tf.map_fn(reduce_attention_sum, 
                     (attention_value_softmax, self._d_input, self._ca), dtype=tf.float32)
 
             # [batch_size, A_len]
-            logging.info('attention_sum shape {}'.format(attention_sum.get_shape()))
+            logging.info('attention_sum shape {}'.format(self._attention_sum.get_shape()))
 
         with tf.variable_scope('prediction'):
             self._prediction = tf.reduce_sum(tf.cast(
-                        tf.equal(tf.cast(self._y, dtype=tf.int64), tf.argmax(attention_sum, 1)), tf.float32))
+                        tf.equal(tf.cast(self._y, dtype=tf.int64), tf.argmax(self._attention_sum, 1)), tf.float32))
 
         with tf.variable_scope('loss'):
-            label = tf.Variable([1., 0., 0., 0., 0., 0., 0., 0., 0., 0.], dtype=tf.float32)
-            output = attention_sum / tf.reduce_sum(attention_sum, -1, keep_dims=True)
-            self._loss = tf.reduce_mean(-tf.log(tf.reduce_sum(attention_sum * label, -1)))
+            label = tf.Variable([1., 0., 0., 0., 0., 0., 0., 0., 0., 0.], dtype=tf.float32, trainable=False)
+            #self._output = self._attention_sum / tf.reduce_sum(self._attention_sum, -1, keep_dims=True)
+            self._loss = tf.reduce_mean(-tf.log(tf.reduce_sum(self._attention_sum * label, -1)))
 
         with tf.variable_scope('train'):
             self._global_step = tf.contrib.framework.get_or_create_global_step()
